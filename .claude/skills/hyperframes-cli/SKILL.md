@@ -1,114 +1,97 @@
 ---
 name: hyperframes-cli
-description: HyperFrames CLI tool — hyperframes init, lint, preview, render, transcribe, tts, doctor, browser, info, upgrade, compositions, docs, benchmark. Use when scaffolding a project, linting or validating compositions, previewing in the studio, rendering to video, transcribing audio, generating TTS, or troubleshooting the HyperFrames environment.
+description: The HyperFrames CLI by job - scaffold, check, look at frames, edit the timeline, preview, render locally or in the cloud, publish, project history - plus reading its JSON and recovering from build or render failures.
 ---
+
+**Plugin installs:** Before setup or freshness commands, follow [plugin execution rules](../hyperframes/references/plugin-installation.md) when this skill is inside a HyperFrames plugin.
 
 # HyperFrames CLI
 
-Everything runs through `npx hyperframes`. Requires Node.js >= 22 and FFmpeg.
+Run `npx hyperframes <command>` unless the project gives a wrapper; then use the wrapper. It needs Node.js 22+ and FFmpeg. Every command has `--help`; most take `--json`, and a failure prints `✗ …`, a `Fix:` line and exits non-zero.
 
-## Workflow
+## Commands by job
 
-1. **Scaffold** — `npx hyperframes init my-video`
-2. **Write** — author HTML composition (see the `hyperframes` skill)
-3. **Lint** — `npx hyperframes lint`
-4. **Preview** — `npx hyperframes preview`
-5. **Render** — `npx hyperframes render`
+| Job | Commands |
+| --- | --- |
+| Start | `init <dir>` (blank; `--example <name>` only when asked), `capture <url>` |
+| Read a project | `info`, `compositions`, `timeline --json`, `docs <topic>` |
+| Check it | `lint` while writing; `check --json` as the gate (lint, runtime, layout, contrast) |
+| Look at it | `snapshot` (`--at <t,…>`, `--range START,END`, `--composition <id>`, `--zoom`, `--angle`, `--against <video>`), `keyframes`, `compare`, `audio` |
+| Edit the timeline | `timeline` with `move`, `trim`, `split`, `set`, `duplicate`, `delete`, `apply`, `undo`, `ids` |
+| Reuse | `catalog`, `add` (`/hyperframes-registry`) |
+| Media and sound | `media-treatment`, `grade-compare`, `remove-background`, `tts`, `transcribe`, `beats`, `normalize-audio` (`/media-use`) |
+| Show and ship | `preview`, `present` (`/slideshow`), `render`, `publish`, `cloud`, `lambda`, `cloudrun` |
+| Desktop app | `open`, `catch-up` |
+| Upkeep | `doctor`, `browser`, `upgrade`, `skills`, `usage`, `clean`, `feedback` |
 
-Lint before preview — catches missing `data-composition-id`, overlapping tracks, unregistered timelines.
+`validate`, `inspect` and `layout` are deprecated aliases of `check`; `events` is telemetry for skills' own scripts. Don't run them.
 
-## Scaffolding
+## The loop
 
-```bash
-npx hyperframes init my-video                        # interactive wizard
-npx hyperframes init my-video --example warm-grain   # pick an example
-npx hyperframes init my-video --video clip.mp4        # with video file
-npx hyperframes init my-video --audio track.mp3       # with audio file
-npx hyperframes init my-video --non-interactive       # skip prompts (CI/agents)
-```
+1. Write, then `npx hyperframes lint` after the first pass and after structural changes.
+2. `npx hyperframes check --json` and fix every error. While a lint error remains the layout and contrast audits don't run; "0 samples" means nothing was checked. Contrast failures carry a `suggestedColor`. A finding at a single sample (an entrance in flight) is info; a 3 s+ video with no visible change fails `sweep_static`.
+3. `npx hyperframes snapshot` and read the PNGs (under `.hyperframes/artifacts/snapshots/`): that is how you see the video. With sub-compositions, snapshot a midpoint of every scene; tiny unstyled content or a missing hero is a mount defect (`../hyperframes/references/format.md`).
+4. `npx hyperframes preview --background`, check the URL answers 200, give the person the project URL and wait, unless they asked for the file or for no stops. Passing checks alone is not a reason to render.
+5. When it is time to render (step 4): `npx hyperframes render --quality looks --output out.mp4` (`draft` while iterating, `delivery` for the final). Confirm the file is non-empty and its `ffprobe` duration matches the root `data-duration`, then look at decoded frames.
 
-Templates: `blank`, `warm-grain`, `play-mode`, `swiss-grid`, `vignelli`, `decision-tree`, `kinetic-type`, `product-promo`, `nyt-graph`.
+"This element" or the current selection: `npx hyperframes preview --context --json --context-fields selection`; `no-selection` means ask them to click it.
 
-`init` creates the right file structure, copies media, transcribes audio with Whisper, and installs AI coding skills. Use it instead of creating files by hand.
+## Edit the timeline
 
-## Linting
+These are the edits Studio itself makes, so the result stays in Studio's shape.
 
-```bash
-npx hyperframes lint                  # current directory
-npx hyperframes lint ./my-project     # specific project
-npx hyperframes lint --verbose        # info-level findings
-npx hyperframes lint --json           # machine-readable
-```
+- `timeline --json` lists clips with absolute `absStart`/`absEnd`, owning `file` and the `#id` ref the edit commands take (`timeline ids` stamps missing ids).
+- `timeline move|trim|split|set|duplicate|delete <ref> … --plan --json` previews one edit; run it again without `--plan`. `--start`, `--end`, `--duration` set one edge or the length.
+- An edit is refused when the clip would overlap a neighbour (`--overwrite`, or move the neighbour first) or end past its composition: raise the root's `data-duration` first. No command changes `data-duration`.
+- Several edits at once: a JSON file such as `[{"verb": "move", "ref": "#outro", "time": "9"}]`, then `timeline apply plan.json --json`. Each run prints a `receipt`; save it and `timeline undo receipt.json` reverts it.
 
-Lints `index.html` and all files in `compositions/`. Reports errors (must fix), warnings (should fix), and info (with `--verbose`).
+<!-- history (trial): remove this block together with the command -->
 
-## Previewing
+## Project history
 
-```bash
-npx hyperframes preview                   # serve current directory
-npx hyperframes preview --port 4567       # custom port (default 3002)
-```
+Every write is kept and can be undone. At the start of a turn, `npx hyperframes history begin --who <you> --label "<plan>"`, then `history --since mine --who <you>` to see what the person changed; build on their edits. A check failed or they say it got worse: `history undo --who <you>`, never hand-edit back. End the turn with `history end`.
 
-Hot-reloads on file changes. Opens the studio in your browser automatically.
+<!-- /history (trial) -->
 
-## Rendering
+## Render where
 
-```bash
-npx hyperframes render                                # standard MP4
-npx hyperframes render --output final.mp4             # named output
-npx hyperframes render --quality draft                # fast iteration
-npx hyperframes render --fps 60 --quality high        # final delivery
-npx hyperframes render --format webm                  # transparent WebM
-npx hyperframes render --docker                       # byte-identical
-```
+| Need | Command |
+| --- | --- |
+| Local | `render --quality looks --output out.mp4` (`draft`, `delivery`) |
+| Reproducible container | `render --docker --strict --output out.mp4` |
+| Batch from variables | `render --batch rows.json --output "renders/{name}.mp4"` |
+| Hosted, no local Chrome or FFmpeg | `cloud render` (`references/cloud.md`) |
+| Your own AWS or GCP | `lambda render`, `cloudrun render` (`references/lambda.md`, `references/cloudrun.md`) |
 
-| Flag           | Options               | Default                    | Notes                       |
-| -------------- | --------------------- | -------------------------- | --------------------------- |
-| `--output`     | path                  | renders/name_timestamp.mp4 | Output path                 |
-| `--fps`        | 24, 30, 60            | 30                         | 60fps doubles render time   |
-| `--quality`    | draft, standard, high | standard                   | draft for iterating         |
-| `--format`     | mp4, webm             | mp4                        | WebM supports transparency  |
-| `--workers`    | 1-8 or auto           | auto                       | Each spawns Chrome          |
-| `--docker`     | flag                  | off                        | Reproducible output         |
-| `--gpu`        | flag                  | off                        | GPU-accelerated encoding    |
-| `--strict`     | flag                  | off                        | Fail on lint errors         |
-| `--strict-all` | flag                  | off                        | Fail on errors AND warnings |
+A 30 s film renders in a minute or two: run it in the foreground. Detach only a render longer than your tool's timeout (`HYPERFRAMES_RENDER_DETACHED=1`, its own group, output to a log) and wait with `until grep -qE 'Render (complete|failed)' render.log; do sleep 5; done`, never `pgrep -f`, which matches its own loop and waits until the tool times out.
 
-**Quality guidance:** `draft` while iterating, `standard` for review, `high` for final delivery.
+After a verified render, send one `feedback --rating`, plus a report for anything the person asked for that HyperFrames can't do, unless telemetry is off: `references/feedback.md`.
 
-## Transcription
+## When a command fails
 
-```bash
-npx hyperframes transcribe audio.mp3
-npx hyperframes transcribe video.mp4 --model medium.en --language en
-npx hyperframes transcribe subtitles.srt   # import existing
-npx hyperframes transcribe subtitles.vtt
-npx hyperframes transcribe openai-response.json
-```
+| Symptom | Fix |
+| --- | --- |
+| Chrome missing or won't start | `npx hyperframes browser ensure`; `doctor --json` always exits 0, gate on `.ok` |
+| A heavy page isn't ready in time | Raise `--timeout` on `check` or `snapshot` |
+| Unusual codec looks blank | Keep `--proxy` on (the default) |
+| Render slow on Linux | The summary's second line says `screenshot` + `software gpu`: the slow path |
+| `capture` fails or writes `BLOCKED.md` | Take nothing from its partial files; retry into a new `-o` folder |
+| Disk tight | `clean --dry-run`, then `clean`; never delete `.hyperframes` (it holds history) |
 
-## Text-to-Speech
+## References
 
-```bash
-npx hyperframes tts "Text here" --voice af_nova --output narration.wav
-npx hyperframes tts script.txt --voice bf_emma
-npx hyperframes tts --list  # show all voices
-```
+Read the row before running its command.
 
-## Troubleshooting
-
-```bash
-npx hyperframes doctor       # check environment (Chrome, FFmpeg, Node, memory)
-npx hyperframes browser      # manage bundled Chrome
-npx hyperframes info         # version and environment details
-npx hyperframes upgrade      # check for updates
-```
-
-Run `doctor` first if rendering fails. Common issues: missing FFmpeg, missing Chrome, low memory.
-
-## Other
-
-```bash
-npx hyperframes compositions   # list compositions in project
-npx hyperframes docs           # open documentation
-npx hyperframes benchmark .    # benchmark render performance
-```
+| Commands | Read |
+| --- | --- |
+| `init`, `capture`, `skills` | `references/init-and-scaffold.md` |
+| `lint`, `check`, motion sidecars, `snapshot` | `references/lint-validate-inspect.md` |
+| `compare`, `grade-compare`, `render --batch` | `references/compare-and-batch.md` |
+| `beats` | `references/beats.md` |
+| `preview`, `play`, `render`, `publish`, Studio context | `references/preview-render.md` |
+| `doctor`, `browser` | `references/doctor-browser.md` |
+| `auth`, `cloud`, template variables | `references/cloud.md` |
+| `lambda`, `cloudrun` | `references/lambda.md`, `references/cloudrun.md` |
+| `info`, `upgrade`, `compositions`, `timeline`, `docs`, `usage`, telemetry | `references/upgrade-info-misc.md` |
+| `--strict` flags, run ids, `clean`, shader lint, JSON paths | `references/conventions.md` |
+| `keyframes` | `../hyperframes/references/motion.md` (Seeing motion) |
