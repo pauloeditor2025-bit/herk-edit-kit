@@ -49,7 +49,9 @@ For local transcription, ask the assistant to configure
 [OpenAI Whisper](https://github.com/openai/whisper) or
 [whisper.cpp](https://github.com/ggml-org/whisper.cpp). Python Whisper requires
 Python and model dependencies; whisper.cpp has its own installation. Neither is
-installed by `npm ci`.
+installed by `npm ci`. On Windows, [WHISPER-LOCAL.md](WHISPER-LOCAL.md) has a ready
+setup for Python Whisper `large-v3` plus a normalizer
+(`scripts/normalize-whisper.mjs`) for the format below.
 
 The cutting tools require this common format, with **word-level times in seconds**
 on the exact source recording's timeline:
