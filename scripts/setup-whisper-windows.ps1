@@ -224,7 +224,7 @@ function Install-TorchCuda([string]$Py, $DriverCuda) {
     try {
       Invoke-Native $Py @('-m', 'pip', 'install', 'torch', '--index-url', "https://download.pytorch.org/whl/$tag")
     } catch {
-      Write-Note "Falhou a instalacao do pacote $tag: $($_.Exception.Message)"
+      Write-Note "Falhou a instalacao do pacote ${tag}: $($_.Exception.Message)"
       continue
     }
     if (Test-TorchCuda $Py) { Write-Ok "torch com GPU funcionando (pacote $tag)."; return }
