@@ -61,6 +61,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--device", choices=["cuda", "cpu"], required=True)
     parser.add_argument("--model-dir", required=True, help="folder that holds large-v3.pt")
+    parser.add_argument(
+        "--allow-low-vram",
+        action="store_true",
+        help="try cuda even when VRAM is below ~10 GiB (same model; stops with exit 3 on out-of-memory)",
+    )
     args = parser.parse_args()
 
     print(f"Python {platform.python_version()} em {platform.system()} {platform.machine()}")
@@ -90,11 +95,13 @@ def main():
         name = torch.cuda.get_device_name(0)
         print(f"GPU: {name} | VRAM {total / GIB:.1f} GiB total, {free / GIB:.1f} GiB livres")
         if total / GIB < MIN_VRAM_GIB - 0.5:
-            fail(
-                3,
+            message = (
                 f"o {MODEL} pede cerca de {MIN_VRAM_GIB} GiB de VRAM e esta GPU tem {total / GIB:.1f} GiB. "
-                "Use --device cpu (FP32) ou me diga se prefere outro modelo; não vou trocar sozinho.",
+                "Use --device cpu (FP32) ou me diga se prefere outro modelo; não vou trocar sozinho."
             )
+            if not args.allow_low_vram:
+                fail(3, message)
+            print(f"AVISO: {message}\n       Tentando mesmo assim (--allow-low-vram); se faltar memória, o erro aparece abaixo.")
     elif ram is not None and ram < MIN_FREE_RAM_GIB:
         fail(
             3,
@@ -105,7 +112,14 @@ def main():
     os.makedirs(args.model_dir, exist_ok=True)
     print(f"Baixando/carregando {MODEL} em {args.model_dir} (o primeiro download tem cerca de 3 GB)...")
     started = time.time()
-    model = whisper.load_model(MODEL, device=args.device, download_root=args.model_dir)
+    try:
+        model = whisper.load_model(MODEL, device=args.device, download_root=args.model_dir)
+    except torch.cuda.OutOfMemoryError:
+        fail(
+            3,
+            f"a GPU ficou sem memória ao carregar o {MODEL}. Rode de novo com -ForceDevice cpu "
+            "(mesmo modelo, FP32) ou me diga se prefere outro modelo; não vou trocar sozinho.",
+        )
     elapsed = time.time() - started
 
     weights = os.path.join(args.model_dir, f"{MODEL}.pt")

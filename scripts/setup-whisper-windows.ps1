@@ -23,15 +23,24 @@
 .PARAMETER SkipTest
   Instala e verifica, mas nao roda o teste de transcricao.
 
+.PARAMETER ForceDevice
+  auto (padrao): GPU NVIDIA com cerca de 10 GiB de VRAM ou mais; senao CPU.
+  cuda: usa a GPU mesmo com menos VRAM que o README do Whisper indica, a pedido da pessoa.
+        Instala o torch para GPU testando cu128, cu126 e cu118 ate o torch enxergar a placa.
+        Se faltar memoria, o Whisper avisa; o modelo nao e trocado.
+  cpu:  forca a CPU em FP32.
+
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File scripts\setup-whisper-windows.ps1
   powershell -ExecutionPolicy Bypass -File scripts\setup-whisper-windows.ps1 -Audio "D:\gravacoes\teste.mp4"
+  powershell -ExecutionPolicy Bypass -File scripts\setup-whisper-windows.ps1 -ForceDevice cuda
 #>
 [CmdletBinding()]
 param(
   [string]$InstallDir = 'D:\ferramentas-ia\whisper',
   [string]$Audio,
-  [switch]$SkipTest
+  [switch]$SkipTest,
+  [ValidateSet('auto', 'cuda', 'cpu')][string]$ForceDevice = 'auto'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -172,43 +181,81 @@ if ($smi) {
 }
 $device = 'cpu'
 if ($gpuName) {
-  $cudaText = if ($cudaVer) { "$cudaVer" } else { 'nao identificada (usarei o pacote cu128 e confirmo depois)' }
+  $cudaText = if ($cudaVer) { "$cudaVer" } else { 'nao identificada (testarei os pacotes cu128, cu126 e cu118)' }
   Write-Ok "GPU NVIDIA: $gpuName | VRAM $vramMiB MiB | CUDA do driver: $cudaText"
+}
+if ($ForceDevice -eq 'cpu') {
+  Write-Note 'Dispositivo forcado para CPU (-ForceDevice cpu).'
+} elseif ($ForceDevice -eq 'cuda') {
+  if (-not $gpuName) { Stop-Setup 'Voce pediu a GPU (-ForceDevice cuda), mas nao encontrei uma GPU NVIDIA (nvidia-smi).' }
+  $device = 'cuda'
+  if ($vramMiB -lt $MinVramMiB) {
+    Write-Note "A GPU tem $vramMiB MiB e o README do Whisper indica cerca de 10 GiB para o $Model. Vou tentar a GPU mesmo assim, a seu pedido. Se faltar memoria, o Whisper avisa (CUDA out of memory); o modelo nao sera trocado."
+  }
+} elseif ($gpuName) {
   if ($vramMiB -ge $MinVramMiB) {
     $device = 'cuda'
   } else {
-    Write-Note "O $Model pede cerca de 10 GiB de VRAM e esta GPU tem $vramMiB MiB. Vou usar a CPU (FP32), sem trocar de modelo."
+    Write-Note "O $Model pede cerca de 10 GiB de VRAM e esta GPU tem $vramMiB MiB. Vou usar a CPU (FP32), sem trocar de modelo. Para tentar a GPU mesmo assim: -ForceDevice cuda."
   }
 } else {
   Write-Note 'Nenhuma GPU NVIDIA detectada (o PyTorch para Windows so acelera com NVIDIA). Vou usar a CPU (FP32).'
 }
-$torchIndex = 'https://download.pytorch.org/whl/cpu'
-if ($device -eq 'cuda') {
-  if (-not $cudaVer -or $cudaVer -ge [version]'12.8') { $torchIndex = 'https://download.pytorch.org/whl/cu128' }
-  elseif ($cudaVer -ge [version]'12.6') { $torchIndex = 'https://download.pytorch.org/whl/cu126' }
-  else { $torchIndex = 'https://download.pytorch.org/whl/cu118' }
-}
+$torchIndexCpu = 'https://download.pytorch.org/whl/cpu'
 Write-Ok "Dispositivo planejado: $device"
 
 # ---------------------------------------------------------------- 4. Ambiente isolado
 Write-Step '4/7  Ambiente isolado e pacotes'
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
+
+function Test-TorchCuda([string]$Py) {
+  $probe = Invoke-Quiet $Py @('-c', 'import torch; print(torch.cuda.is_available())')
+  return ($probe.Code -eq 0 -and (($probe.Output | Out-String).Trim() -eq 'True'))
+}
+# Testa os pacotes de torch para GPU do mais novo ao mais antigo ate o torch enxergar a placa.
+# A versao de CUDA do driver, quando conhecida, so reduz a lista; a prova e o torch.cuda.is_available().
+function Install-TorchCuda([string]$Py, $DriverCuda) {
+  $tags = @('cu128', 'cu126', 'cu118')
+  if ($DriverCuda -and $DriverCuda -lt [version]'12.8') { $tags = @('cu126', 'cu118') }
+  if ($DriverCuda -and $DriverCuda -lt [version]'12.6') { $tags = @('cu118') }
+  foreach ($tag in $tags) {
+    Write-Host "  Instalando torch para GPU ($tag)..."
+    Invoke-Quiet $Py @('-m', 'pip', 'uninstall', '-y', 'torch') | Out-Null
+    try {
+      Invoke-Native $Py @('-m', 'pip', 'install', 'torch', '--index-url', "https://download.pytorch.org/whl/$tag")
+    } catch {
+      Write-Note "Falhou a instalacao do pacote $tag: $($_.Exception.Message)"
+      continue
+    }
+    if (Test-TorchCuda $Py) { Write-Ok "torch com GPU funcionando (pacote $tag)."; return }
+    Write-Note "O pacote $tag instalou, mas o torch nao enxerga a GPU com este driver. Tentando o proximo."
+  }
+}
+
 if (-not $venvReady) {
   if (-not (Test-Path -LiteralPath $VenvPy)) { Invoke-Native $PythonExe @('-m', 'venv', $VenvDir) }
   Invoke-Native $VenvPy @('-m', 'pip', 'install', '--upgrade', 'pip', 'setuptools', 'wheel')
-  Write-Host "  Instalando torch ($torchIndex)..."
-  Invoke-Native $VenvPy @('-m', 'pip', 'install', 'torch', '--index-url', $torchIndex)
+  if ($device -eq 'cuda') {
+    Install-TorchCuda $VenvPy $cudaVer
+  } else {
+    Write-Host "  Instalando torch ($torchIndexCpu)..."
+    Invoke-Native $VenvPy @('-m', 'pip', 'install', 'torch', '--index-url', $torchIndexCpu)
+  }
   Write-Host '  Instalando openai-whisper (PyPI, fonte oficial)...'
   Invoke-Native $VenvPy @('-m', 'pip', 'install', '-U', 'openai-whisper')
   Write-Ok 'Pacotes instalados.'
+} elseif ($device -eq 'cuda' -and -not (Test-TorchCuda $VenvPy)) {
+  Write-Host '  O ambiente existente tem torch sem GPU; trocando por um torch com suporte a CUDA (o openai-whisper e o modelo sao mantidos).'
+  Install-TorchCuda $VenvPy $cudaVer
 }
-if ($device -eq 'cuda') {
-  $cudaProbe = Invoke-Quiet $VenvPy @('-c', 'import torch; print(torch.cuda.is_available())')
-  if ($cudaProbe.Code -ne 0 -or (($cudaProbe.Output | Out-String).Trim() -ne 'True')) {
-    Write-Note "O torch deste ambiente nao enxerga a GPU. Usando a CPU (FP32). Para tentar a GPU, apague a pasta $VenvDir e rode este script de novo."
-    $device = 'cpu'
+if ($device -eq 'cuda' -and -not (Test-TorchCuda $VenvPy)) {
+  if ($ForceDevice -eq 'cuda') {
+    Stop-Setup "Nao consegui fazer o torch enxergar a GPU (testei cu128, cu126 e cu118). Atualize o driver NVIDIA e rode de novo. Nao troquei de modelo. Para voltar a CPU: -ForceDevice cpu (se o torch ficar quebrado, apague $VenvDir antes)."
   }
+  Write-Note 'O torch deste ambiente nao enxerga a GPU. Usando a CPU (FP32).'
+  $device = 'cpu'
 }
+$lowVram = ($device -eq 'cuda' -and $vramMiB -lt $MinVramMiB)
 if ($device -eq 'cpu' -and $ramGiB -lt $MinCpuRamGiB) {
   Stop-Setup "Em CPU o $Model (FP32) pede cerca de $MinCpuRamGiB GiB de RAM e este PC tem $ramGiB GiB. Nao vou trocar de modelo sozinho: me diga como prefere seguir."
 }
@@ -221,7 +268,9 @@ if (Test-Path -LiteralPath (Join-Path $cacheDir "$Model.pt")) {
   $ModelDir = $cacheDir
   Write-Ok "Pesos ja existentes em $cacheDir. Reutilizando."
 }
-Invoke-Native $VenvPy @($CheckScript, '--device', $device, '--model-dir', $ModelDir)
+$checkArgs = @($CheckScript, '--device', $device, '--model-dir', $ModelDir)
+if ($lowVram) { $checkArgs += '--allow-low-vram' }
+Invoke-Native $VenvPy $checkArgs
 
 # Configuracao para o script de transcricao reaproveitar.
 $config = [ordered]@{ model = $Model; device = $device; venv = $VenvDir; modelDir = $ModelDir; kitRoot = $KitRoot }

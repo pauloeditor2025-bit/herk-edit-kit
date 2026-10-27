@@ -20,6 +20,10 @@
 .PARAMETER InstallDir
   Mesma pasta usada na instalacao.
 
+.PARAMETER Device
+  Usa 'cuda' (GPU) ou 'cpu' so nesta execucao, em vez do que o setup gravou. O modelo continua large-v3.
+  Util para voltar para a CPU se a GPU de 8 GiB ficar sem memoria num video longo.
+
 .PARAMETER Force
   Permite substituir um <nome>.json e uma pasta <nome>.whisper que ja existam.
 
@@ -31,6 +35,7 @@ param(
   [Parameter(Mandatory = $true)][string]$Media,
   [string]$Language = 'Portuguese',
   [string]$InstallDir = 'D:\ferramentas-ia\whisper',
+  [ValidateSet('config','cuda','cpu')][string]$Device = 'config',
   [switch]$Force
 )
 
@@ -71,13 +76,14 @@ if (-not $Force) {
 }
 New-Item -ItemType Directory -Force -Path $WhisperOut | Out-Null
 
-Write-Host "Transcrevendo $MediaPath com $($config.model) em $($config.device) (idioma: $Language)..." -ForegroundColor Cyan
+$RunDevice = if ($Device -eq 'config') { [string]$config.device } else { $Device }
+Write-Host "Transcrevendo $MediaPath com $($config.model) em $RunDevice (idioma: $Language)..." -ForegroundColor Cyan
 $WhisperArgs = @(
-  $MediaPath, '--model', $config.model, '--model_dir', $config.modelDir, '--device', $config.device,
+  $MediaPath, '--model', $config.model, '--model_dir', $config.modelDir, '--device', $RunDevice,
   '--language', $Language, '--task', 'transcribe',
   '--word_timestamps', 'True', '--output_format', 'all', '--output_dir', $WhisperOut
 )
-if ($config.device -eq 'cpu') { $WhisperArgs += @('--fp16', 'False') }
+if ($RunDevice -eq 'cpu') { $WhisperArgs += @('--fp16', 'False') }
 Invoke-Native $WhisperExe $WhisperArgs
 
 $whisperJson = Join-Path $WhisperOut "$stem.json"

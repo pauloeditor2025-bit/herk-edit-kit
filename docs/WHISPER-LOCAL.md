@@ -31,6 +31,20 @@ Device choice, with no model change:
 
 If neither fits, the script stops with the numbers instead of swapping models.
 
+### Forcing the GPU on a card with less than 10 GiB (for example 8 GiB)
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\setup-whisper-windows.ps1 -ForceDevice cuda
+```
+
+This keeps `large-v3`, swaps the venv's CPU-only PyTorch for a CUDA build (about 2.5 to
+3 GB download; the weights are reused), confirms `torch.cuda.is_available()`, and loads
+the model on the GPU. Fits are not guaranteed: weights load as FP32 (about 6 GiB) and
+then run in FP16, so long recordings can run out of VRAM. If that happens the check stops
+with a clear message and nothing is swapped; go back with `-ForceDevice cpu`, or for one
+transcription use `whisper-transcribe-windows.ps1 -Device cpu`. If the CUDA install fails,
+the script stops instead of silently using the CPU.
+
 `scripts/whisper-check.py` verifies the import, memory, and loads the weights with
 `whisper.load_model("large-v3")`, confirming the multilingual 128-mel checkpoint.
 
