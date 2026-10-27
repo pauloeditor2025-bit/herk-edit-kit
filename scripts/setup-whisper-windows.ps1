@@ -164,14 +164,17 @@ if ($smi) {
   if ($query.Code -eq 0 -and $query.Output.Count -gt 0) {
     $parts = ([string]$query.Output[0]) -split ','
     $gpuName = $parts[0].Trim(); $vramMiB = [int]($parts[1].Trim())
-    $banner = (Invoke-Quiet $smi.Source @()).Output | Out-String
+    # A versao de CUDA so escolhe qual pacote do torch baixar; ela nao decide o dispositivo.
+    $banner = ''
+    try { $banner = (& $smi.Source 2>$null | Out-String) } catch { }
     if ($banner -match 'CUDA Version:\s*(\d+)\.(\d+)') { $cudaVer = [version]"$($Matches[1]).$($Matches[2])" }
   }
 }
 $device = 'cpu'
 if ($gpuName) {
-  Write-Ok "GPU NVIDIA: $gpuName | VRAM $vramMiB MiB | CUDA do driver: $cudaVer"
-  if ($vramMiB -ge $MinVramMiB -and $cudaVer) {
+  $cudaText = if ($cudaVer) { "$cudaVer" } else { 'nao identificada (usarei o pacote cu128 e confirmo depois)' }
+  Write-Ok "GPU NVIDIA: $gpuName | VRAM $vramMiB MiB | CUDA do driver: $cudaText"
+  if ($vramMiB -ge $MinVramMiB) {
     $device = 'cuda'
   } else {
     Write-Note "O $Model pede cerca de 10 GiB de VRAM e esta GPU tem $vramMiB MiB. Vou usar a CPU (FP32), sem trocar de modelo."
@@ -181,7 +184,7 @@ if ($gpuName) {
 }
 $torchIndex = 'https://download.pytorch.org/whl/cpu'
 if ($device -eq 'cuda') {
-  if ($cudaVer -ge [version]'12.8') { $torchIndex = 'https://download.pytorch.org/whl/cu128' }
+  if (-not $cudaVer -or $cudaVer -ge [version]'12.8') { $torchIndex = 'https://download.pytorch.org/whl/cu128' }
   elseif ($cudaVer -ge [version]'12.6') { $torchIndex = 'https://download.pytorch.org/whl/cu126' }
   else { $torchIndex = 'https://download.pytorch.org/whl/cu118' }
 }

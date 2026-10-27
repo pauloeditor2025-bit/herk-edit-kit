@@ -26,7 +26,7 @@ Device choice, with no model change:
 
 | Machine | Device |
 | --- | --- |
-| NVIDIA GPU with about 10 GiB of VRAM or more | CUDA (PyTorch wheels `cu118`, `cu126` or `cu128`, picked from the driver's CUDA version) |
+| NVIDIA GPU with about 10 GiB of VRAM or more | CUDA (PyTorch wheels `cu118`, `cu126` or `cu128`, picked from the driver's CUDA version, or `cu128` when it cannot be read; the script then confirms that torch sees the GPU) |
 | Smaller or no NVIDIA GPU | CPU with `--fp16 False` (FP32); needs about 16 GiB of RAM |
 
 If neither fits, the script stops with the numbers instead of swapping models.
